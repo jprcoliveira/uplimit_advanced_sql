@@ -1,3 +1,15 @@
+-- Advanced SQL Week 1 Assignment (Question 1)
+-- Date: April 28, 2024
+-- Created by: Joao Oliveira
+
+-- Methodology Outline:
+-- Step 1: Remove duplicate cities using qualify function
+-- Step 2: Join customer info and geo location and filter to customers who can order
+-- Step 3: Join supplier info and geo location
+-- Step 4: Calculate the shortest customer-to-supplier distance using cross join and qualify on row_number
+-- Step 5: Final query where we order by last name and first name asc
+
+
 WITH us_cities AS (
     SELECT 
         city_id,
