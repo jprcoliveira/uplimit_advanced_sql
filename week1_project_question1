@@ -1,0 +1,102 @@
+WITH us_cities AS (
+    SELECT 
+        city_id,
+        UPPER(TRIM(city_name)) AS city_name,
+        UPPER(TRIM(state_name)) AS city_state_name,
+        UPPER(TRIM(state_abbr)) AS city_state_abbr,
+        geo_location AS city_geo_location
+    FROM vk_data.resources.us_cities
+    WHERE 1=1 
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY UPPER(TRIM(city_name)), UPPER(TRIM(state_abbr)) ORDER BY UPPER(TRIM(city_name)) ASC) = 1 
+),
+
+customer_address AS (
+    SELECT
+        customer_id,
+        address_id,
+        UPPER(TRIM(customer_city)) AS customer_city,
+        UPPER(TRIM(customer_state)) AS customer_state
+    FROM vk_data.customers.customer_address
+),
+
+customer_data AS (
+    SELECT
+        customer_id,
+        first_name AS customer_first_name,
+        last_name AS customer_last_name,
+        email AS customer_email
+    FROM vk_data.customers.customer_data
+),
+
+customer_data_with_geo_info AS (
+    SELECT
+        c.customer_id AS customer_id,
+        customer_first_name,
+        customer_last_name,
+        customer_email,
+        ca.customer_city,
+        ca.customer_state
+    FROM customer_data AS c
+    LEFT JOIN customer_address ca ON c.customer_id = ca.customer_id
+    INNER JOIN us_cities us_c ON customer_city = us_c.city_name AND customer_state = us_c.city_state_abbr
+),
+
+supplier_info AS (
+    SELECT 
+        supplier_id,
+        supplier_name,
+        UPPER(TRIM(supplier_city)) AS supplier_city_name,
+        UPPER(TRIM(supplier_state)) AS supplier_state_abbr
+    FROM vk_data.suppliers.supplier_info
+),
+
+supplier_geo_location AS (
+    SELECT 
+        si.supplier_id,
+        si.supplier_name,
+        si.supplier_city_name,
+        si.supplier_state_abbr,
+        city_geo_location AS supplier_city_geo_location
+    FROM supplier_info si 
+    LEFT JOIN us_cities uc ON si.supplier_city_name = uc.city_name AND si.supplier_state_abbr = uc.city_state_abbr
+),
+
+city_to_supplier_cross_join AS (
+    SELECT 
+        city_id,
+        supplier_id,
+        city_name,
+        city_state_abbr,
+        supplier_name,
+        supplier_city_name,
+        supplier_state_abbr,
+        ROUND(ST_DISTANCE(uc.city_geo_location, sgl.supplier_city_geo_location) / 1609,1) AS distance_to_supplier_miles
+    FROM us_cities uc 
+    CROSS JOIN supplier_geo_location sgl 
+),
+
+city_to_supplier AS (
+    SELECT 
+        city_id,
+        supplier_id,
+        city_name,
+        city_state_abbr,
+        supplier_name,
+        supplier_city_name,
+        supplier_state_abbr,
+        distance_to_supplier_miles
+    FROM city_to_supplier_cross_join
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY city_id ORDER BY distance_to_supplier_miles ASC) = 1
+)
+
+SELECT
+    customer_id,
+    customer_first_name,
+    customer_last_name,
+    customer_email,
+    supplier_id,
+    supplier_name,
+    distance_to_supplier_miles
+FROM customer_data_with_geo_info cgi
+LEFT JOIN city_to_supplier cts ON cgi.customer_city = cts.city_name AND cgi.customer_state = cts.city_state_abbr
+ORDER BY customer_last_name ASC, customer_first_name ASC;
