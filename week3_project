@@ -1,0 +1,99 @@
+-- Advanced SQL Week 3 Assignment
+-- Date: May 10, 2024
+-- Created by: Joao Oliveira
+
+-- Query Use Case: daily stats snapshot of website_activity for Virtual Kitchen
+
+-- Step 1: calculate the unique session count and session length (start and end times)
+
+WITH session_counts_and_lenght AS
+(
+WITH A AS
+(SELECT 
+    session_id,
+    MIN (EVENT_TIMESTAMP) as min_session_time,
+    MAX (EVENT_TIMESTAMP) as max_session_time,
+    DATEDIFF("minutes",MIN (EVENT_TIMESTAMP),MAX (EVENT_TIMESTAMP)) as date_dif_session_time
+FROM vk_data.events.website_activity
+GROUP BY 1)
+
+SELECT 
+    CAST (min_session_time as date) as session_date,
+    COUNT (DISTINCT session_id) as total_sessions,
+    AVG(date_dif_session_time) as avg_session_time
+FROM A
+GROUP BY 1),
+
+-- Step 2: calculate the total searches before the first recipe was viewed
+
+total_searches AS
+(WITH A AS
+(SELECT 
+    SESSION_ID,
+    MIN (EVENT_TIMESTAMP) as session_start,
+    MIN (CASE WHEN JSON_EXTRACT_PATH_TEXT (EVENT_DETAILS,'event') = 'view_recipe' THEN EVENT_TIMESTAMP END) as      first_recipe
+FROM vk_data.events.website_activity
+GROUP BY 1),
+
+B AS 
+(SELECT
+    ac.SESSION_ID,
+    CAST (session_start as date) as session_date, 
+    COUNT (CASE WHEN (JSON_EXTRACT_PATH_TEXT (ac.EVENT_DETAILS,'event') = 'search' AND DATEDIFF("seconds",first_recipe,EVENT_TIMESTAMP) > 0) THEN 1 ELSE 0 END) as count_searches,
+    first_recipe
+FROM vk_data.events.website_activity as ac
+JOIN A ON A.session_id = ac.session_id 
+WHERE first_recipe is not null
+GROUP BY 1,2,4)
+
+SELECT 
+    session_date,
+    SUM (count_searches) as total_searches
+FROM B
+GROUP BY 1
+),
+
+-- Step 3: calculate the most viewed recipe(s) on a given day and retrieve its recipe_id
+
+most_popular_recipe AS
+(WITH A AS  (SELECT 
+    EVENT_ID,
+    CAST (EVENT_TIMESTAMP as date) as date,
+    JSON_EXTRACT_PATH_TEXT (EVENT_DETAILS,'recipe_id') as recipe_id
+FROM vk_data.events.website_activity
+WHERE JSON_EXTRACT_PATH_TEXT (EVENT_DETAILS,'page') = 'recipe'
+),
+
+B AS
+(SELECT 
+    date,
+    recipe_id,
+    COUNT (EVENT_ID) as page_count,
+    RANK() OVER (PARTITION BY date ORDER BY page_count DESC) as daily_rank
+FROM A
+GROUP BY 1,2)
+
+SELECT
+    date, 
+    recipe_id,
+FROM B
+WHERE daily_rank = 1)
+
+-- Step 4: join the tables from steps 1, 2 and 3 on date return the final output table
+
+SELECT 
+    s.session_date as session_date,
+    s.total_sessions,
+    s.avg_session_time,
+    COALESCE(ts.total_searches,0) as total_searches,
+    LISTAGG(mpr.recipe_id, ', ') AS most_popular_recipe_id
+FROM session_counts_and_lenght as s
+LEFT JOIN total_searches as ts ON ts.session_date = s.session_date
+LEFT JOIN most_popular_recipe as mpr ON mpr.date = s.session_date
+GROUP BY 1,2,3,4
+ORDER BY 1 DESC 
+
+-- Notes on Query Performance: tried to apply the following to my query:
+-- - Create different CTEs with the mininmal number of columns and rows as possible (e.g. filters in Step 2 and 3)
+-- - ORDER BY applied only in the final query
+-- - Avoided fuzzy matching for the EVENT details and used the JSON path for more sepcific filtering
